@@ -1,0 +1,140 @@
+<!---- inside cluster.ts ----!>
+  * so i was doing this process of sending the postrequest to the signalProcess file where my http.request process.on will pick it up and send the process to the coressponding
+    worker listening on worker.on("worker_comm")
+    if (targetWorker) {
+          // worker sending the message to targetWorker 
+           worker.send({
+             type: "insider_worker_comm",
+             from: worker.process.pid,
+             message: message.data,
+             to: targetWorker!.process.pid,
+             requestId: message.requestId,
+           })
+           // i was thinking of both the worker sending the message to each other at same time so i made this , since the worker always able to send the message to each other 
+           // by sending the message to worker.on() which is individual to each worker process.
+           targetWorker.send({
+             from: targetWorker.process.pid,
+             message: message.data,
+             to: worker.process.pid,
+           })
+          message.targetWorkerId = targetWorker.process.pid
+          message.workerId = worker.process.pid
+          worker.emit("to_once", message)
+        }
+    --- so i found out that until my express route does send response to the http.request(i.e, res.send() by express api is automatically pulled by http.request(which keep on listening for any request made by any api ))
+    --- the htpp.request keep on handging until it is send 
+  * so i was getting inside express post api , and there i was sending message to master process with process.send() with target worker id , request id and the post request data (which was unneeded ) 
+  * then listening to the worker process request the master process after the type match was in turn sending data(workerID , targetID, requestID and body) to the worker process for that i've made process.on() inside the worker_comm_async.ts
+  * which in turns create a Event Emitter to make a synchronous flow , now this eventEmitter emit the event and the listener is listening to the event and on event listening with eventEmitter.once() i was again sending process request from the 
+    worker process to the master process , so this made a 3 way sending 
+                            _______ISSUES______
+  * 1) http request keep on hanging (since i was not sending res.send() from post request ) therefore the other process.send ain't working , since i was creating a eventemitter which run on different thread so after the eventemitter get's executed then the respond was send to http.request() with failure
+  * 2) I created a new eventemitter inside the process.on() else condition which was creating the http.request() , now for any thing other than http_request send by worker will be listened by this eventemitter and will send message to this
+                        <!---- inside signalProcess.ts ----!>
+                    customEmitter.emit("inter_worker_comm", msg)
+                        
+                        <!---- inside worker_comm_async.ts ----!>
+                customEmitter.once("inter_worker_comm", (msg: any) => {
+                    if (msg.type === "insider_worker_comm") {
+                      if (msg && msg.from && msg.to) worker_comm_event.emit(requestId, msg)
+                    }
+                  })
+      this is before i created the condition to check the req.method inside the cluster for post and get request 
+  * 3) Now i created the condtion to the req.mehod inside the cluster.ts , which for all get request hit http_request and hit req.url for post and other request then i write the condition inside the signalProces.ts  that all the http_request  will be inside if condition on the process.on() and rest will be in else.
+  * 4) which lead me to another problem that even after creating the else condtion , i need the http.request to resolve the data send by api routes from first_api.ts and if i ran http.request first then it will keep on hanging until resolved, so i instead send the process to the worker with specific type need by master process
+        --but the problem was that process is sending and worker is recieving fine , but the problem arise because inside the worker.on i was sending the requestID, workerId and so on ... (above code) , which should be recieved by post route , {notice this!!} since http.request ain't made yet hence the master and worker has no way to 
+        --communicate with the api routes hence i.e, only http.request is resolving the api routes and until it is triggered we can't send worker.send() to the process.on inside the post request.
+  * 5) so i need to create the http.request first , and finally i thought i don't need to send and recieve anything from the master  to worker or vice versa, because with res.send i can send the body and then i can let the master process to close the response when send to the client, i.e with res.send() i send body to the http.request which in turn with process.send()
+        -- sends it to the appropriate worker.type and from the i can end the req with sending the body to the client
+
+    
+                    >>>>>>>>>>>>>>>REDUNDANT CODE REMOVED FROM MAIN FILES<<<<<<<<<<<<<<<<<<
+  <!---- inside first_api.ts ----!>
+
+  -------------inside the /worker_comm post route --------------------
+  // setTimeout(async () => {
+  //   await withEventEmitter(res, data)
+  // }, 1000)
+  // with_callback(res)
+
+  * the with_callback and withEventEmitter , was from the previous created file , which i explained above
+                    
+                    <!---- inside first_api.ts ----!>
+
+// import { with_callback, withEventEmitter } from "../utils/worker_comm_async.js"
+// import { customEmitter } from "../signalProcess.js"
+  
+  
+          <!---- inside worker_comm_aysnc_api.ts ----! 🇲🇵:DELETED_FILE>
+
+// import { EventEmitter } from "events"
+// import { Response } from "express"
+// import process from "process"
+// import { customEmitter } from "../signalProcess.js"
+// //! since process .on is an asynchronous function hence we need to wrap it in a callback so that when the data is available we can send the response
+// const worker_comm_event = new EventEmitter()
+// function getRandomId() {
+//   return Math.random().toString(36).substring(2, 9)
+// }
+// export async function withEventEmitter(res: Response, data: string) {
+//   try {
+//     const requestId = getRandomId()
+
+//     if (process.send) {
+//       process.send({
+//         type: "worker_comm",
+//         data,
+//         // requestId,
+//       })
+//     }
+
+//     worker_comm_event.once(requestId, (msg: any) => {
+//       // ! handle error if worker didn't respond
+//       if (msg === "error") {
+//         console.log("faileddddddddddd.", msg)
+//         return res.status(500).send("error occurred")
+//       } else {
+//         const sendedBy = msg.from
+//         const sendedTo = msg.to
+//         const data = msg.message
+//         // console.log("succedddddddddddd", msg)
+
+//         return res
+//           .status(200)
+//           .send(
+//             `Recieved by ${sendedBy}, Sended to ${sendedTo} with message: ${data}`
+//           )
+//       }
+//     })
+
+//     process.on("message", (msg: any) => {
+//       console.log("yoo", msg)
+//       if (msg.type === "insider_worker_comm") {
+//         if (msg && msg.from && msg.to) worker_comm_event.emit(requestId, msg)
+//       }
+//     })
+//     setTimeout(() => worker_comm_event.emit(requestId, "error"), 2000)
+//   } catch (err) {
+//     console.log(err + "error")
+//   }
+// }
+
+// function cb_helper(cb: (msg: any) => void): void {
+//   process.on("message", (msg) => {
+//     console.log("inside cb_helper ")
+//     cb(msg)
+//   })
+// }
+
+// export function with_callback(res: Response) {
+//   cb_helper((msg: any) => {
+//     const sendedBy = msg.from
+//     const sendedTo = msg.to
+//     const data = msg.data
+//     return res
+//       .status(200)
+//       .send(
+//         `Recieved by ${sendedBy}, Sended to ${sendedTo} with message: ${data}`
+//       )
+//   })
+// }
